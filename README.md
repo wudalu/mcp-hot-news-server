@@ -221,7 +221,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 ## 📞 联系我们 Contact
 
 - GitHub Issues: [提交问题](https://github.com/yourusername/mcp-hot-news-server/issues)
-- Email: contact@example.com
+- Email: wuzexiang@gmail.com
 
 ---
 
