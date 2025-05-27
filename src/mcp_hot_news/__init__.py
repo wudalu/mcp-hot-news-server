@@ -10,11 +10,11 @@ __author__ = "ByteDance"
 __email__ = "contact@example.com"
 
 from .server import mcp, HotNewsProvider
-from .client import HotNewsClient
+from .client import HotNewsMCPClient
 
 __all__ = [
     "mcp",
-    "HotNewsProvider", 
-    "HotNewsClient",
+    "HotNewsProvider",
+    "HotNewsMCPClient",
     "__version__",
-] 
+]
