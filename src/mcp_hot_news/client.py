@@ -83,9 +83,21 @@ class HotNewsMCPClient:
                 logger.info(f"连接到远程服务器: {self.config.server_url}")
             else:
                 # 默认连接到本地服务器文件
-                server_path = "mcp_servers/hot_news_server/server.py"
-                self._client = Client(server_path)
-                logger.info(f"使用默认服务器路径: {server_path}")
+                import os
+                from pathlib import Path
+                
+                # 获取当前文件的目录
+                current_dir = Path(__file__).parent
+                server_path = current_dir / "server.py"
+                
+                if server_path.exists():
+                    self._client = Client(str(server_path))
+                    logger.info(f"使用本地服务器路径: {server_path}")
+                else:
+                    # 如果找不到服务器文件，使用相对路径
+                    fallback_path = "third_party/mcp-hot-news-server/src/mcp_hot_news/server.py"
+                    self._client = Client(fallback_path)
+                    logger.info(f"使用备用服务器路径: {fallback_path}")
         except Exception as e:
             logger.error(f"设置客户端连接失败: {e}")
             raise
@@ -297,6 +309,104 @@ class HotNewsToolAdapter:
         except Exception as e:
             logger.error(f"获取所有平台新闻失败: {e}")
             return "获取新闻时发生错误: " + str(e)
+
+    async def get_domestic_news_formatted(
+        self, limit: int = 10, format_type: str = "summary"
+    ) -> str:
+        """获取国内平台格式化新闻"""
+        try:
+            if not self.connected_client or not self.connected_client._client:
+                raise RuntimeError("客户端未连接")
+
+            result = await self.connected_client._client.call_tool(
+                "get_domestic_platforms_news", {"limit": limit}
+            )
+
+            if result and result[0].text:
+                data = json.loads(result[0].text)
+                platforms_data = data.get("platforms", [])
+                domestic_news = [PlatformNews(**platform) for platform in platforms_data]
+
+                if not domestic_news:
+                    return "无法获取国内平台的热点新闻"
+
+                if format_type == "summary":
+                    return self._format_all_news_summary(domestic_news)
+                elif format_type == "detailed":
+                    return self._format_all_news_detailed(domestic_news)
+                elif format_type == "json":
+                    return json.dumps(
+                        [news.model_dump() for news in domestic_news],
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                else:
+                    return self._format_all_news_summary(domestic_news)
+            else:
+                return "无法获取国内平台的热点新闻"
+
+        except Exception as e:
+            logger.error(f"获取国内平台新闻失败: {e}")
+            return "获取国内平台新闻时发生错误: " + str(e)
+
+    async def get_global_news_formatted(
+        self, limit: int = 10, format_type: str = "summary"
+    ) -> str:
+        """获取全球平台格式化新闻"""
+        try:
+            if not self.connected_client or not self.connected_client._client:
+                raise RuntimeError("客户端未连接")
+
+            result = await self.connected_client._client.call_tool(
+                "get_global_platforms_news", {"limit": limit}
+            )
+
+            if result and result[0].text:
+                data = json.loads(result[0].text)
+                platforms_data = data.get("platforms", [])
+                global_news = [PlatformNews(**platform) for platform in platforms_data]
+
+                if not global_news:
+                    return "无法获取全球平台的热点新闻"
+
+                if format_type == "summary":
+                    return self._format_all_news_summary(global_news)
+                elif format_type == "detailed":
+                    return self._format_all_news_detailed(global_news)
+                elif format_type == "json":
+                    return json.dumps(
+                        [news.model_dump() for news in global_news],
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                else:
+                    return self._format_all_news_summary(global_news)
+            else:
+                return "无法获取全球平台的热点新闻"
+
+        except Exception as e:
+            logger.error(f"获取全球平台新闻失败: {e}")
+            return "获取全球平台新闻时发生错误: " + str(e)
+
+    async def analyze_controversy_trends(self, limit: int = 10) -> str:
+        """分析争议性趋势"""
+        try:
+            if not self.connected_client or not self.connected_client._client:
+                raise RuntimeError("客户端未连接")
+
+            result = await self.connected_client._client.call_tool(
+                "analyze_controversy_trends", {"limit": limit}
+            )
+
+            if result and result[0].text:
+                data = json.loads(result[0].text)
+                return json.dumps(data, ensure_ascii=False, indent=2)
+            else:
+                return "无法获取争议性趋势分析"
+
+        except Exception as e:
+            logger.error(f"分析争议性趋势失败: {e}")
+            return "分析争议性趋势时发生错误: " + str(e)
 
     async def analyze_trends_formatted(
         self, limit: int = 10, format_type: str = "summary"
