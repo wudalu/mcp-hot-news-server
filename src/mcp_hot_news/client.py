@@ -75,29 +75,38 @@ class HotNewsMCPClient:
         try:
             if self.config.server_path:
                 # 连接到本地Python服务器文件
+                from fastmcp import Client
                 self._client = Client(self.config.server_path)
                 logger.info(f"连接到本地服务器: {self.config.server_path}")
             elif self.config.server_url:
                 # 连接到远程HTTP服务器
+                from fastmcp import Client
                 self._client = Client(self.config.server_url)
                 logger.info(f"连接到远程服务器: {self.config.server_url}")
             else:
-                # 默认连接到本地服务器文件
+                # 默认使用模块方式启动服务器
                 import os
                 from pathlib import Path
+                from fastmcp import Client
+                from fastmcp.client import PythonStdioTransport
                 
-                # 获取当前文件的目录
+                # 获取项目根目录
                 current_dir = Path(__file__).parent
-                server_path = current_dir / "server.py"
+                project_root = current_dir.parent.parent.parent.parent  # 回到项目根目录
+                mcp_server_dir = project_root / "third_party" / "mcp-hot-news-server"
+                server_script = mcp_server_dir / "src" / "mcp_hot_news" / "server.py"
                 
-                if server_path.exists():
-                    self._client = Client(str(server_path))
-                    logger.info(f"使用本地服务器路径: {server_path}")
-                else:
-                    # 如果找不到服务器文件，使用相对路径
-                    fallback_path = "third_party/mcp-hot-news-server/src/mcp_hot_news/server.py"
-                    self._client = Client(fallback_path)
-                    logger.info(f"使用备用服务器路径: {fallback_path}")
+                # 创建Python Stdio Transport
+                transport = PythonStdioTransport(
+                    script_path=str(server_script),
+                    args=[],
+                    cwd=str(mcp_server_dir),
+                    env=os.environ.copy()
+                )
+                
+                # 使用transport创建客户端
+                self._client = Client(transport)
+                logger.info(f"使用Python脚本启动MCP服务器: {server_script} (工作目录: {mcp_server_dir})")
         except Exception as e:
             logger.error(f"设置客户端连接失败: {e}")
             raise
@@ -109,8 +118,17 @@ class HotNewsMCPClient:
             raise RuntimeError("客户端未初始化")
 
         try:
-            async with self._client:
-                yield self
+            # fastmcp的Client使用async with模式
+            async with self._client as client:
+                # 临时保存原始客户端引用
+                original_client = self._client
+                # 将连接后的客户端设置为当前客户端
+                self._client = client
+                try:
+                    yield self
+                finally:
+                    # 恢复原始客户端引用
+                    self._client = original_client
         except Exception as e:
             logger.error(f"客户端连接失败: {e}")
             raise
@@ -123,12 +141,15 @@ class HotNewsMCPClient:
             if not self._client:
                 raise RuntimeError("客户端未连接")
 
+            # 使用fastmcp的call_tool方法
             result = await self._client.call_tool(
                 "get_hot_news", {"platform": platform, "limit": limit}
             )
 
-            if result and result[0].text:
-                data = json.loads(result[0].text)
+            if result and len(result) > 0:
+                # fastmcp返回的是content列表，取第一个text内容
+                text_content = result[0].text if hasattr(result[0], 'text') else str(result[0])
+                data = json.loads(text_content)
                 return PlatformNews(**data)
 
             return None
@@ -143,12 +164,15 @@ class HotNewsMCPClient:
             if not self._client:
                 raise RuntimeError("客户端未连接")
 
+            # 使用fastmcp的call_tool方法
             result = await self._client.call_tool(
                 "get_all_platforms_news", {"limit": limit}
             )
 
-            if result and result[0].text:
-                data = json.loads(result[0].text)
+            if result and len(result) > 0:
+                # fastmcp返回的是content列表，取第一个text内容
+                text_content = result[0].text if hasattr(result[0], 'text') else str(result[0])
+                data = json.loads(text_content)
                 platforms_data = data.get("platforms", [])
                 return [PlatformNews(**platform) for platform in platforms_data]
 
@@ -164,10 +188,13 @@ class HotNewsMCPClient:
             if not self._client:
                 raise RuntimeError("客户端未连接")
 
+            # 使用fastmcp的call_tool方法
             result = await self._client.call_tool("analyze_trends", {"limit": limit})
 
-            if result and result[0].text:
-                data = json.loads(result[0].text)
+            if result and len(result) > 0:
+                # fastmcp返回的是content列表，取第一个text内容
+                text_content = result[0].text if hasattr(result[0], 'text') else str(result[0])
+                data = json.loads(text_content)
                 return TrendAnalysis(**data)
 
             return None
@@ -182,10 +209,13 @@ class HotNewsMCPClient:
             if not self._client:
                 raise RuntimeError("客户端未连接")
 
+            # 使用fastmcp的call_tool方法
             result = await self._client.call_tool("get_server_health", {})
 
-            if result and result[0].text:
-                return json.loads(result[0].text)
+            if result and len(result) > 0:
+                # fastmcp返回的是content列表，取第一个text内容
+                text_content = result[0].text if hasattr(result[0], 'text') else str(result[0])
+                return json.loads(text_content)
 
             return {"status": "unknown"}
 
@@ -199,11 +229,14 @@ class HotNewsMCPClient:
             if not self._client:
                 raise RuntimeError("客户端未连接")
 
+            # 使用fastmcp的call_tool方法
             result = await self._client.call_tool("clear_cache", {})
 
-            if result and result[0].text:
-                data = json.loads(result[0].text)
-                return data.get("status") == "success"
+            if result and len(result) > 0:
+                # fastmcp返回的是content列表，取第一个text内容
+                text_content = result[0].text if hasattr(result[0], 'text') else str(result[0])
+                response = json.loads(text_content)
+                return response.get("success", False)
 
             return False
 

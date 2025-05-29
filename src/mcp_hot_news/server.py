@@ -18,7 +18,7 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 # 导入配置管理
-from .config import mcp_config
+from mcp_hot_news.config import mcp_config
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -254,6 +254,15 @@ class HotNewsProvider:
         platform_info = self.domestic_platforms[platform]
         platform_name = platform_info["name"]
         
+        # 检查缓存
+        cache_key = f"news_{platform}_{limit}"
+        cached_data = self.cache_manager.get(cache_key)
+        if cached_data:
+            logger.info(f"CACHE HIT: 从缓存加载 {platform_name} 数据")
+            return cached_data
+        
+        logger.info(f"CACHE MISS: 正在从API获取 {platform_name} 数据")
+
         if platform_info.get("vvhan", False):
             # 使用vvhan API
             api_path = platform_info["api_path"]
@@ -262,82 +271,74 @@ class HotNewsProvider:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 try:
                     response = await client.get(url)
+                    response.raise_for_status() # 如果状态码不是2xx，则抛出HTTPStatusError
+                    data = response.json()
 
-                    if response.status_code == 200:
-                        data = response.json()
-
-                        # 检查API是否返回成功状态
-                        if data.get("success") is True and "data" in data:
-                            # vvhan API返回的数据格式
-                            raw_data = data["data"]
-
-                            # 处理不同的数据格式
-                            items = []
-                            if isinstance(raw_data, dict) and "list" in raw_data:
-                                # 格式1: {"data": {"list": [...]}}
-                                items = raw_data["list"][:limit]
-                            elif isinstance(raw_data, list):
-                                # 格式2: {"data": [...]}
-                                items = raw_data[:limit]
-                            else:
-                                logger.warning(f"vvhan API返回意外格式 - 平台: {platform_name}, 数据类型: {type(raw_data)}")
-                                return await self._get_mock_news(platform, limit)
-
-                            # 转换为标准格式
-                            news_items = []
-                            for i, item in enumerate(items):
-                                if isinstance(item, dict):
-                                    title = item.get("title", "")
-                                    if title:  # 只处理有标题的项目
-                                        # 处理不同的字段名
-                                        url_field = item.get("url") or item.get("link") or item.get("mobil_url", "")
-                                        hot_field = item.get("hot") or item.get("heat") or item.get("index", 0)
-                                        
-                                        news_item = NewsItem(
-                                            title=title,
-                                            url=url_field,
-                                            hot_value=hot_field,
-                                            rank=i + 1,
-                                            platform=platform_name,
-                                            timestamp=datetime.now().isoformat(),
-                                            description=title[:100] if title else "",
-                                            source=platform_name,
-                                            controversy_score=self.controversy_analyzer.calculate_controversy_score(title),
-                                            engagement_potential=0.7  # 国内平台默认互动潜力
-                                        )
-                                        news_items.append(news_item)
-
-                            if news_items:  # 只有当有有效数据时才返回
-                                platform_news = PlatformNews(
-                                    platform=platform_name,
-                                    news_list=news_items,
-                                    update_time=datetime.now().isoformat(),
-                                    total_count=len(news_items),
-                                    platform_type="domestic"
-                                )
-
-                                # 缓存结果
-                                cache_key = f"news_{platform}_{limit}"
-                                self.cache_manager.set(cache_key, platform_news)
-                                logger.info(f"✅ {platform_name} 数据获取成功: {len(news_items)}条")
-                                return platform_news
-                            else:
-                                logger.warning(f"vvhan API返回空数据 - 平台: {platform_name}")
-                                return await self._get_mock_news(platform, limit)
+                    # 检查API是否返回成功状态
+                    if data.get("success") is True and "data" in data:
+                        raw_data = data["data"]
+                        items = []
+                        if isinstance(raw_data, dict) and "list" in raw_data:
+                            items = raw_data["list"][:limit]
+                        elif isinstance(raw_data, list):
+                            items = raw_data[:limit]
                         else:
-                            # API返回失败或格式不正确
-                            success_status = data.get("success")
-                            message = data.get("message", "未知错误")
-                            logger.warning(f"vvhan API返回失败 - 平台: {platform_name}, success: {success_status}, message: {message}")
+                            logger.warning(f"vvhan API返回意外格式 - 平台: {platform_name}, 数据类型: {type(raw_data)}")
+                            return await self._get_mock_news(platform, limit)
+
+                        news_items = []
+                        for i, item in enumerate(items):
+                            if isinstance(item, dict):
+                                title = item.get("title", "")
+                                if title:
+                                    url_field = item.get("url") or item.get("link") or item.get("mobil_url", "")
+                                    hot_field = item.get("hot") or item.get("heat") or item.get("index", 0)
+                                    
+                                    news_item = NewsItem(
+                                        title=title,
+                                        url=url_field,
+                                        hot_value=hot_field,
+                                        rank=i + 1,
+                                        platform=platform_name,
+                                        timestamp=datetime.now().isoformat(),
+                                        description=title[:100] if title else "",
+                                        source=platform_name,
+                                        controversy_score=self.controversy_analyzer.calculate_controversy_score(title),
+                                        engagement_potential=0.7
+                                    )
+                                    news_items.append(news_item)
+
+                        if news_items:
+                            platform_news = PlatformNews(
+                                platform=platform_name,
+                                news_list=news_items,
+                                update_time=datetime.now().isoformat(),
+                                total_count=len(news_items),
+                                platform_type="domestic"
+                            )
+                            self.cache_manager.set(cache_key, platform_news)
+                            logger.info(f"✅ {platform_name} 数据获取成功: {len(news_items)}条")
+                            return platform_news
+                        else:
+                            logger.warning(f"vvhan API返回空数据或无有效标题 - 平台: {platform_name}")
                             return await self._get_mock_news(platform, limit)
                     else:
-                        logger.warning(f"vvhan API请求失败 - 平台: {platform_name}, 状态码: {response.status_code}")
+                        success_status = data.get("success")
+                        message = data.get("message", "未知错误")
+                        logger.warning(f"vvhan API返回失败 - 平台: {platform_name}, success: {success_status}, message: {message}")
                         return await self._get_mock_news(platform, limit)
-                        
+                except httpx.HTTPStatusError as e:
+                    logger.warning(f"HTTP请求失败: {e.response.status_code} for {e.request.url}")
+                    return await self._get_mock_news(platform, limit)
                 except Exception as e:
                     logger.error(f"获取 {platform_name} 数据时发生异常: {str(e)}")
                     return await self._get_mock_news(platform, limit)
+        else:
+            # 如果不是vvhan平台或者配置不正确，也返回mock数据
+            logger.warning(f"平台 {platform_name} 未配置为使用vvhan API或配置不完整")
+            return await self._get_mock_news(platform, limit)
         
+        # 理论上不应执行到这里，但作为安全措施
         return await self._get_mock_news(platform, limit)
 
     async def _get_global_platform_news(self, platform: str, limit: int) -> Optional[PlatformNews]:
@@ -832,7 +833,7 @@ class HotNewsProvider:
 
         for platform_news in all_news:
             platform_summary[platform_news.platform] = platform_news.total_count
-            
+
             for news_item in platform_news.news_list:
                 # 提取关键词（简单实现）
                 title_words = news_item.title.split()
@@ -840,7 +841,7 @@ class HotNewsProvider:
                 
                 # 添加趋势话题
                 trending_topics.append(news_item.title)
-                
+
                 # 收集争议性分数
                 if news_item.controversy_score:
                     controversy_scores.append(news_item.controversy_score)
@@ -917,13 +918,13 @@ async def get_all_platforms_news(
     """获取所有平台（国内+全球）热点新闻"""
     try:
         all_news = await news_provider.get_all_platforms_news(limit)
-        
+
         result = {
             "platforms": [news.model_dump() for news in all_news],
-            "total_platforms": len(all_news),
-            "update_time": datetime.now().isoformat(),
+                "total_platforms": len(all_news),
+                "update_time": datetime.now().isoformat(),
         }
-        
+
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"获取所有平台新闻时出错: {str(e)}")
@@ -1028,7 +1029,7 @@ async def get_server_health() -> str:
     """获取服务器健康状态"""
     try:
         cache_stats = news_provider.cache_manager.get_stats()
-        
+
         health_info = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
@@ -1045,7 +1046,7 @@ async def get_server_health() -> str:
                 "twitter_configured": bool(os.getenv('TWITTERAPI_IO_KEY') or os.getenv('ZYLA_API_KEY'))
             }
         }
-        
+
         return json.dumps(health_info, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"获取服务器健康状态时出错: {str(e)}")
